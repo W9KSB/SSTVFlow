@@ -8,7 +8,7 @@ Normal operation requires only the source's sample rate and its PCM audio. Mode 
 decoder 48000 < input.s16le > events.ndjson
 ```
 
-**Development status:** Robot36 and PD120 are implemented and tested. Image-quality refinement is ongoing, especially for weak or interfered signals. Linux ARM64 is the intended deployment target; Raspberry Pi performance and Unix control-descriptor operation still need target-side validation. See [validation results and remaining work](docs/validation.md).
+**Status:** Robot36 and PD120 are implemented. Image-quality refinement is ongoing, especially for weak or interfered signals. Linux ARM64 is the intended deployment target; Raspberry Pi performance and Unix control-descriptor operation still need target-side validation.
 
 ## Supported modes
 
@@ -65,16 +65,6 @@ The positional rate argument must match the source audio. An unframed byte strea
 Reads can contain any number of bytes, including one byte. Unmatched bytes are retained between reads. Chunk boundaries do not define tones, lines, or images. The process keeps its decoding state across reads and transmissions until stdin reaches EOF.
 
 For live reception, write audio bytes to stdin and continuously consume JSON events from stdout. Delivery pauses do not count as radio silence; actual silence is represented by PCM samples. EOF drains usable filter state, emits any recoverable partial result, and exits.
-
-### Decode a WAV recording
-
-The included file adapter accepts **mono PCM16 WAV** files, streams their samples through the same decoder, and saves resulting PNGs:
-
-```sh
-python tools/decode_wav.py recording.wav --output decoded
-```
-
-The adapter prints a JSON report with image paths, row classifications, frequency/timing estimates, and processing measurements. Stereo recordings need a channel selected or mixed upstream; compressed recordings need conversion to PCM16 first. The decoder itself accepts PCM bytes rather than WAV containers.
 
 ### Start in the middle of a transmission
 
@@ -189,20 +179,6 @@ decoder.eof()
 
 For a live source, call `feed()` as PCM bytes arrive and call `eof()` when the stream finishes. `control()` accepts the same command objects described in the control documentation. The development API and event schema may evolve while quality work continues.
 
-## Validation and development
+## Current limitations
 
-The latest recorded full suite passed **124 tests**, including real reception captures, supported sample rates, arbitrary/odd byte boundaries, progressive output, missing VIS, two-second middle excerpts, mistuning, clock mismatch, missed sync, fading, impulses, noise treatment, phase-wrap interpolation, timing jitter, shared-chroma refinement, and RXSSTV receiver-reference comparison. Real-data tests explicitly skip when their local fixtures are unavailable.
-
-```sh
-python -m pip install -e '.[test,benchmark]'
-python -m pytest -q
-python tools/fetch_corpus.py corpus/robot36
-python tools/fetch_corpus.py corpus/pd120
-python tools/benchmark.py corpus/robot36/frame_13773866_1.wav
-```
-
-Public corpus manifests contain source provenance, hashes, crop intervals, and receiver-reference information. Download tooling restores the public corpus audio/crops; receiver references remain linked in manifests. Receiver images are comparison references rather than exact transmitter ground truth.
-
-`.gitignore` excludes audio fixtures, the entire local `corpus/user/` directory, `artifacts/`, `decoded/`, environments, caches, build outputs, and local configuration. Keep generated images and reports inside `artifacts/` or `decoded/`; the WAV adapter reports the supplied input/output paths, so its reports should remain local. Commit source, tests, documentation, and public corpus manifests. Ignore rules apply to untracked files; files already tracked by Git require removal from its index before the rules take effect.
-
-Current limitations include difficult weak/interfered receptions, remaining speckling and texture loss, incomplete competitive-decoder quality comparison, and unverified ARM64 deployment performance. Synthetic tests and host benchmarks do not establish real-radio or Raspberry Pi acceptance. Detailed evidence and outstanding checks are in [validation](docs/validation.md); the original scope is preserved in [requirements](docs/requirements.md).
+Difficult weak/interfered receptions can still produce speckling, texture loss, and incomplete images. Competitive-decoder quality comparison and ARM64 deployment performance remain unverified.

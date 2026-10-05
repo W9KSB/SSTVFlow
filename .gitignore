@@ -20,10 +20,16 @@ dist/
 htmlcov/
 coverage.xml
 
+# Local development material
+/corpus/
+/tests/
+/tools/
+/docs/requirements.md
+/docs/validation.md
+
 # Decoder outputs and private validation fixtures
 artifacts/
 decoded/
-corpus/user/
 *.wav
 *.ogg
 *.flac
@@ -34,10 +40,7 @@ corpus/user/
 *.pcm
 *.ndjson
 *.log
-corpus/**/*.jpg
-corpus/**/*.jpeg
-corpus/**/*.png
-/image-*.png
+/*.png
 docs/daytonpaper.pdf
 
 # Local configuration, credentials, editor state, and scratch files
