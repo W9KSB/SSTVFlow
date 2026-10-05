@@ -7,6 +7,7 @@ name = "SSTVFlow"
 version = "0.1.1"
 description = "SSTVFlow: an automatic streaming Robot36 and PD120 SSTV decoder"
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.26", "scipy>=1.12", "Pillow>=10"]
 

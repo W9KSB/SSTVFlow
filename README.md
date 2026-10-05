@@ -182,3 +182,9 @@ For a live source, call `feed()` as PCM bytes arrive and call `eof()` when the s
 ## Current limitations
 
 Difficult weak/interfered receptions can still produce speckling, texture loss, and incomplete images. Competitive-decoder quality comparison and ARM64 deployment performance remain unverified.
+
+## License
+
+SSTVFlow is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). It permits use, modification, and sharing for purposes allowed by the license. Commercial use requires separate permission from the copyright holder.
+
+This is source-available software with a noncommercial restriction, so it does not meet the [Open Source Definition](https://opensource.org/osd). Third-party dependencies retain their own licenses.
