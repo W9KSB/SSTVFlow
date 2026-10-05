@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "SSTVFlow"
-version = "0.1.0"
+version = "0.1.1"
 description = "SSTVFlow: an automatic streaming Robot36 and PD120 SSTV decoder"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -137,6 +137,8 @@ The implementation follows published SSTV protocol timings and standard DSP/colo
 
 Received constant-tone references establish whether reception is noisy. A local variance-dependent filter reduces grain in flat channel regions while retaining stronger edges. Clean fitted channels bypass smoothing. Noise estimation also works after headerless acquisition and updates from subsequent sync observations.
 
+Images that start on the wider pixel filter can automatically select narrower filtering during interference and restore the wider path after sustained clean sync references. Timing and received sample positions remain unchanged; no additional tuning control is required. An initial narrow-filter selection remains in effect for that image.
+
 This is still being refined: grain, horizontal interference, and texture loss can remain. Noise reduction cannot recreate information that was not received reliably.
 
 ## Optional controls
@@ -189,7 +191,7 @@ For a live source, call `feed()` as PCM bytes arrive and call `eof()` when the s
 
 ## Validation and development
 
-The latest recorded full suite passed **120 tests**, including real reception captures, supported sample rates, arbitrary/odd byte boundaries, progressive output, missing VIS, two-second middle excerpts, mistuning, clock mismatch, missed sync, fading, impulses, noise treatment, phase-wrap interpolation, timing jitter, shared-chroma refinement, and RXSSTV receiver-reference comparison. Real-data tests explicitly skip when their local fixtures are unavailable.
+The latest recorded full suite passed **124 tests**, including real reception captures, supported sample rates, arbitrary/odd byte boundaries, progressive output, missing VIS, two-second middle excerpts, mistuning, clock mismatch, missed sync, fading, impulses, noise treatment, phase-wrap interpolation, timing jitter, shared-chroma refinement, and RXSSTV receiver-reference comparison. Real-data tests explicitly skip when their local fixtures are unavailable.
 
 ```sh
 python -m pip install -e '.[test,benchmark]'

@@ -76,6 +76,9 @@ class Decoder:
         self.protocol_history=FrequencyBuffer(self.rate) if self.protocol_dsp else self.history
         self.pixel_history=self.history
         self.active_pixel_band=self.method
+        self.initial_pixel_band = self.method
+        self.pixel_band_errors = deque(maxlen=3)
+        self.pixel_band_clean_lines = 0
         self.raw_history = FrequencyBuffer(self.rate)
         self.detector = ProtocolDetector(self.rate, self.protocol_history, self._header, self._sync)
         self.detector.offset = self.applied_frequency
@@ -177,8 +180,7 @@ class Decoder:
         self.pixel_history=self.history
         self.active_pixel_band=self.method
         if self.protocol_dsp:
-            # Compare reference-tone error, never picture content. Choose once per
-            # acquisition, so noise cannot make the image oscillate between filters.
+            # Choose from protocol references, never from picture content.
             target=1900 if known else 1200
             try:
                 errors = []
@@ -195,6 +197,9 @@ class Decoder:
                     self.active_pixel_band="narrow"
             except ValueError:
                 pass
+        self.pixel_band_errors.clear()
+        self.pixel_band_clean_lines = 0
+        self.initial_pixel_band = self.active_pixel_band
         self.physical_lines = 240 if mode=="Robot36" else 248
         self.clock = LineClock(self.rate, start, .150 if mode=="Robot36" else pd120.PAIR_SECONDS)
         self.clock.auto = self.auto_slant
@@ -348,6 +353,37 @@ class Decoder:
             f = f*(1-strength) + filtered*strength
         return frequency_to_byte(f-self.applied_frequency), float(np.mean(valid))
 
+    def _pixel_band_reference(self, start, scale):
+        # An acquisition-selected narrow path remains the established image path.
+        # Only images whose initial references support the wider path adapt later.
+        if self.protocol_dsp is None or self.initial_pixel_band == "narrow":
+            return
+        try:
+            begin = start + .002*self.rate*scale
+            end = start + .007*self.rate*scale
+            errors = tuple(float(np.percentile(abs(history.interval(begin,end)
+                                                   -1200-self.applied_frequency),90))
+                           for history in (self.history,self.protocol_history))
+        except ValueError:
+            return
+        self.pixel_band_errors.append(errors)
+        broad, narrow = np.median(self.pixel_band_errors,axis=0)
+        # Sustained reference errors indicate fading or interference. Both FIR
+        # histories use the input timeline, so a row-boundary change adds no delay.
+        if len(self.pixel_band_errors) >= 3 and broad > 120 and narrow < broad*.85:
+            self.pixel_history = self.protocol_history
+            self.active_pixel_band = "narrow"
+            self.pixel_band_clean_lines = 0
+        elif errors[0] < 60:
+            self.pixel_band_clean_lines += 1
+            # Require a clean run before restoring the wider detail path; isolated
+            # quiet sync pulses should not alternate filters on successive rows.
+            if self.pixel_band_clean_lines >= 8:
+                self.pixel_history = self.history
+                self.active_pixel_band = self.method
+        else:
+            self.pixel_band_clean_lines = 0
+
     def _rows(self):
         if self.image and self.image.mode=="PD120":
             self._pd_rows()
@@ -366,6 +402,7 @@ class Decoder:
             self._recover_sync(line,start,.009,scale)
             start=self.clock.predict(line)
             scale=self.clock.period/(.150*self.rate)
+            self._pixel_band_reference(start,scale)
             inferred = line not in self.observed_lines
             self.sync_gap = self.sync_gap + 1 if inferred else 0
             if self.sync_gap > (32 if self.clock.confidence >= .7 else 8):
@@ -423,6 +460,7 @@ class Decoder:
                 self._recover_sync(pair,start,.020,self.clock.period/(pd120.PAIR_SECONDS*self.rate))
                 start=self.clock.predict(pair)
                 layout=pd120.channel_layout(self.rate,start,self.clock.period,self.horizontal_ms)
+                self._pixel_band_reference(start,self.clock.period/(pd120.PAIR_SECONDS*self.rate))
                 inferred=pair not in self.observed_lines
                 self.sync_gap=self.sync_gap+1 if inferred else 0
                 if self.sync_gap>(32 if self.clock.confidence>=.7 else 8):
