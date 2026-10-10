@@ -1,8 +1,9 @@
 """Protocol color conversion, separate from neutral-by-default display controls."""
 import numpy as np
+from .pixels import _structured_detail
 
 
-def guided_chroma_noise_reduction(cr, cb, luminance):
+def guided_chroma_noise_reduction(cr, cb, luminance, *, noise_ratio=None):
     """Filter one native shared-chroma pair without changing luminance.
 
     ``luminance`` contains one or more guides at the chroma's native width.
@@ -11,7 +12,10 @@ def guided_chroma_noise_reduction(cr, cb, luminance):
     boundaries. Call only after independent reference-tone noise evidence.
     """
     cr, cb = np.asarray(cr, dtype=float), np.asarray(cb, dtype=float)
+    if noise_ratio is not None and noise_ratio <= .02:
+        return cr.copy(), cb.copy()
     guides = np.atleast_2d(np.asarray(luminance, dtype=float))
+    detail = _structured_detail(cr) | _structured_detail(cb)
     radius = 2
     rp, bp = (np.pad(channel, radius, mode="edge") for channel in (cr, cb))
     yp = np.pad(guides, ((0, 0), (radius, radius)), mode="edge")
@@ -33,7 +37,8 @@ def guided_chroma_noise_reduction(cr, cb, luminance):
         b += weight * bp[neighbor]
     # This follows frequency-domain treatment, so retain half of the original
     # chroma rather than repeatedly applying a full-strength spatial filter.
-    return .5 * (cr + r / total), .5 * (cb + b / total)
+    return (np.where(detail, cr, .5 * (cr + r / total)),
+            np.where(detail, cb, .5 * (cb + b / total)))
 
 
 def frequency_to_byte(frequency):

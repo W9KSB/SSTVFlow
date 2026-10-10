@@ -1,5 +1,7 @@
 # Control interface
 
+Receive filtering is selected at startup: `--demodulator quadrature` (default automatic broad/narrow selection), `narrow` (fixed narrow), `sharp` (fixed sharper filtering for noisy reception), or `hilbert` (alternative analytic estimator). Python callers use `Decoder(rate, emit, method="sharp")` for the explicit sharp profile. These settings persist across reset; there is no runtime filter-switch command. Sharp filtering trades fine detail for noise rejection.
+
 Launch `decoder RATE --control-fd N`. N must be an inherited read descriptor >=3, separate from stdin/stdout/stderr. Commands are newline-delimited JSON objects; the line limit is 65536 bytes. Invalid commands produce an `error` event and leave the process running. Successful commands produce a `status` acknowledgment on stdout. Commands do not go into the PCM stream.
 
 | Operation | JSON command |
@@ -7,8 +9,13 @@ Launch `decoder RATE --control-fd N`. N must be an inherited read descriptor >=3
 | Query | `{"command":"status"}` |
 | Reset | `{"command":"reset"}` |
 | Automatic selection | `{"command":"mode","mode":"auto"}` |
+| Force Robot 24 | `{"command":"mode","mode":"Robot24"}` |
 | Force Robot 36 | `{"command":"mode","mode":"Robot36"}` |
+| Force Robot 72 | `{"command":"mode","mode":"Robot72"}` |
+| Force Martin M1 | `{"command":"mode","mode":"MartinM1"}` |
+| Force Martin M2 | `{"command":"mode","mode":"MartinM2"}` |
 | Force PD120 | `{"command":"mode","mode":"PD120"}` |
+| Force PD180 | `{"command":"mode","mode":"PD180"}` |
 | Manual frequency correction | `{"command":"frequency","auto":false,"offset_hz":75}` |
 | Automatic frequency correction | `{"command":"frequency","auto":true}` |
 | Manual timing/slant | `{"command":"slant","auto":false,"ppm":1000}` |

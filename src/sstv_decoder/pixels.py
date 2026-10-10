@@ -16,17 +16,49 @@ def coherent_pixel_frequency(frequencies, amplitudes, previous_amplitudes, sampl
     return np.angle(correlation) * sample_rate / (2 * np.pi)
 
 
-def adaptive_channel_noise_reduction(frequencies):
+def _structured_detail(values):
+    """Recognize locally recurring detail before using picture variance as noise.
+
+    Correlation with shifted samples distinguishes coherent strokes/texture from
+    independent noise. Use several lags because alternating pixels have negative
+    correlation at one pixel but positive correlation at their period.
+    """
+    values = np.asarray(values, dtype=float)
+    protected = np.zeros(values.shape, dtype=bool)
+    if len(values) < 17:
+        return protected
+    padded = np.pad(values, 8, mode="edge")
+    mean = uniform_filter1d(values, 17, mode="nearest")
+    variance = np.maximum(0, uniform_filter1d(values**2, 17, mode="nearest") - mean**2)
+    for lag in (*range(-8, 0), *range(1, 9)):
+        shifted = padded[8 + lag:8 + lag + len(values)]
+        other_mean = uniform_filter1d(shifted, 17, mode="nearest")
+        other_variance = np.maximum(0, uniform_filter1d(shifted**2, 17, mode="nearest") - other_mean**2)
+        covariance = uniform_filter1d(values * shifted, 17, mode="nearest") - mean * other_mean
+        protected |= covariance > .6 * np.sqrt(np.maximum(variance * other_variance, 1e-12))
+    return protected
+
+
+def adaptive_channel_noise_reduction(frequencies, *, noise_ratio=None):
     """Local Wiener estimate: smooth noisy flat areas, retain stronger edges.
 
-    Noise power is estimated from the median five-pixel local variance. Callers
-    must establish noisy reception independently; texture alone is not a noise
-    detector. This does not need neighboring rows or additional audio latency.
+    Noise power is estimated only where there is no recurring picture detail.
+    ``noise_ratio`` is optional independently measured reference-tone residual;
+    clean references bypass filtering. It gates reception noise, rather than
+    pretending to convert PCM residual into pixel-frequency variance. This does
+    not need neighboring rows or additional audio latency.
     """
+    frequencies = np.asarray(frequencies, dtype=float)
+    if noise_ratio is not None and noise_ratio <= .02:
+        return frequencies.copy()
+    detail = _structured_detail(frequencies)
+    if np.all(detail):
+        return frequencies.copy()
     mean = uniform_filter1d(frequencies, 5, mode="nearest")
     variance = np.maximum(0, uniform_filter1d(frequencies**2, 5, mode="nearest") - mean**2)
-    noise = float(np.median(variance))
+    noise = float(np.median(variance[~detail]))
     gain = np.maximum(0, 1 - noise / np.maximum(variance, 1e-12))
+    gain[detail] = 1
     return mean + gain * (frequencies - mean)
 
 

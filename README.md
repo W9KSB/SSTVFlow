@@ -8,16 +8,21 @@ Normal operation requires only the source's sample rate and its PCM audio. Mode 
 decoder 48000 < input.s16le > events.ndjson
 ```
 
-**Status:** Robot36 and PD120 are implemented. Image-quality refinement is ongoing, especially for weak or interfered signals. Linux ARM64 is the intended deployment target; Raspberry Pi performance and Unix control-descriptor operation still need target-side validation.
+**Status:** Robot24, Robot36, Robot72, Martin M1/M2, and PD120/PD180 are implemented. Image-quality refinement is ongoing, especially for weak or interfered signals. Linux ARM64 is the intended deployment target; Raspberry Pi performance and Unix control-descriptor operation still need target-side validation.
 
 ## Supported modes
 
 | Mode | Image size | Reception |
 |---|---|---|
+| Robot24 | 160 × 120 | Automatic VIS or repeated line-structure acquisition |
 | Robot36 | 320 × 240 | Automatic VIS or repeated line-structure acquisition |
+| Robot72 | 320 × 240 | Automatic VIS or repeated line-structure acquisition |
+| MartinM1 | 320 × 256 | Automatic VIS or repeated line-structure acquisition |
+| MartinM2 | 320 × 256 | Automatic VIS or repeated line-structure acquisition |
 | PD120 | 640 × 496 | Automatic VIS or repeated line-structure acquisition |
+| PD180 | 640 × 496 | Automatic VIS or repeated line-structure acquisition |
 
-Only these two modes are currently supported. Progressive RGB rows and row revisions are available during reception, followed by an authoritative lossless PNG when an image or recoverable segment ends.
+Progressive RGB rows and row revisions are available during reception, followed by an authoritative lossless PNG when an image or recoverable segment ends.
 
 ## Installation
 
@@ -70,7 +75,7 @@ For live reception, write audio bytes to stdin and continuously consume JSON eve
 
 Opening tones and VIS are optional. SSTVFlow can recognize repeated sync pulses, scan cadence, porch tones, and mode-specific channel structure after reception has already started.
 
-Two-second middle excerpts have decoded successfully in the tested Robot36 and PD120 recordings. A usable excerpt must contain enough recognizable structure; heavily damaged sync or picture tones alone may prevent acquisition.
+Two-second middle excerpts have decoded successfully in selected recordings for all supported modes. A usable excerpt must contain enough recognizable structure; heavily damaged sync or picture tones alone may prevent acquisition.
 
 Headerless reception produces `image_partial`. Recovered rows start at local index zero, and the transmitter's original row number remains unknown. Partial first/last scans may be omitted. The decoder preserves recoverable content without assigning an invented position within the original image.
 
@@ -118,7 +123,7 @@ Consumers must keep draining stdout. A blocked output pipe applies backpressure,
 2. **Automatic acquisition:** VIS identifies a supported mode when available. Without VIS, repeated sync/cadence and channel evidence establish the mode. Raw-tone checks help recover short references distorted by noisy phase estimates.
 3. **Separate frequency and timing correction:** qualified raw reference-tone fits estimate mistuning. A robust line-clock model estimates sample-clock mismatch and slant. Bounded matched-sync searches and timing prediction help bridge short sync losses.
 4. **Pixel estimation:** short fractional pixel apertures preserve sampling alignment. Amplitude-weighted phase integration suppresses unstable observations near signal nulls. Clean channels can use tightly gated raw sine fitting to retain fine detail.
-5. **Chroma reconstruction:** Robot36 separates luminance and alternating Cr/Cb scans, reconstructs shared chroma, and revises provisional rows. PD120 extracts two luminance rows with shared full-width chroma per physical scan pair.
+5. **Channel reconstruction:** Robot36 reconstructs alternating shared Cr/Cb scans and revises provisional rows. Robot24 and Robot72 carry both chroma channels on each line. Martin modes transmit green, blue, and red scans directly. PD modes extract two luminance rows with shared full-width chroma per physical scan pair.
 6. **Progressive output:** completed rows emit during reception. A bounded audio history and fixed-size image state retain the data needed for tracking, reconstruction, revisions, and the final PNG.
 
 The implementation follows published SSTV protocol timings and standard DSP/color-conversion techniques, including the [Dayton SSTV specification](https://www.classicsstv.com/downloads/daytonpaper.pdf). It is independently implemented using NumPy, SciPy, and Pillow. Further timing, buffer, and estimator details are in the [architecture document](docs/architecture.md).
@@ -141,10 +146,14 @@ The default command needs no tuning controls. Advanced callers can override freq
 | `--noise-reduction 0.6` | Replace automatic treatment with a manual median blend, strength 0–1 |
 | `--diagnostics` | Write detailed accepted-sync/timing observations to stderr |
 | `--control-fd N` | Read runtime JSON commands from a separate inherited descriptor |
-| `--demodulator hilbert` / `narrow` | Select an alternative estimator or explicit narrow bandpass |
+| `--demodulator hilbert` | Select an alternative analytic estimator |
+| `--demodulator narrow` | Force the narrow receive bandpass |
+| `--demodulator sharp` | Force a sharper receive bandpass for noisy reception |
 | `--pixel-estimator phase` / `sinefit` | Override adaptive pixel estimation for comparison |
 
 Forced `sinefit` is an experimental clean-signal comparison setting; individual short-window fits can be unreliable in noise. Normal automatic reception selects its pixel path from received reference evidence.
+
+The default `quadrature` setting balances detail and noise with automatic broad/narrow selection. Explicit `sharp` filtering can reduce speckling on noisy signals, but can blur fine text and fast pixel transitions. Select it at startup when cleaner flat areas matter more than maximum detail; it remains selected through reset. It uses the same compensated input timeline and keeps a separate narrow protocol path. Clean raw sine fits remain independently gated, so a sharper bandpass does not filter every pixel estimate.
 
 Runtime commands are newline-delimited JSON on the control descriptor, separate from PCM. For example:
 
