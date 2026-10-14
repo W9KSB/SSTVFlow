@@ -10,7 +10,7 @@ from .image import ImageState
 from .color import frequency_to_byte, ycrcb_to_rgb, display_adjust, guided_chroma_noise_reduction
 from . import __version__
 from . import pd120
-from .modes import MODES, SUPPORTED_MODES, VIS_MODES, sync_matches
+from .modes import MODES, SUPPORTED_MODES, VIS_MODES, row_span, sync_matches
 from .pixels import fit_pixel_frequencies, adaptive_channel_noise_reduction
 from .sync import matched_sync, robot_chroma_phase, reference_noise_ratio, robot_porch_matches, fit_reference_offset
 from .robot_acquisition import RawRobotAcquisition, robot72_has_extra_sync, robot_sync_edge, tone_evidence
@@ -90,6 +90,7 @@ class Decoder:
         self.candidates = deque(maxlen=32)
         self.extended_candidates = deque(maxlen=64)
         self.observed_lines = {}
+        self._line_tracking = {}
         self.components = {}
         self.next_line = 0
         self.last_sync = self.samples
@@ -196,7 +197,8 @@ class Decoder:
         if self.image:
             self._finish("next_image_started")
         profile = MODES[mode]
-        self.image = ImageState(self.emit, mode, profile.width, profile.height, source, confidence, known)
+        self._line_tracking = {}
+        self.image = ImageState(self._image_event, mode, profile.width, profile.height, source, confidence, known)
         self.raw_robot_tracking = False
         self.detector.search_offset = False
         self.detector.offset = self.applied_frequency
@@ -236,7 +238,10 @@ class Decoder:
         self._receive_until = self.samples + round(self.physical_lines * profile.period * self.rate)
         self._holding_signal = False
         self._clear_martin()
-        self.clock = LineClock(self.rate, start, profile.period)
+        # Scottie's VIS stop ends at its out-of-sequence start sync, not at the
+        # row's regular sync. Headerless acquisition already reports that sync.
+        anchor = start + (profile.header_offset * self.rate if known else 0.0)
+        self.clock = LineClock(self.rate, anchor, profile.period)
         self.clock.auto = self.auto_slant
         self.clock.manual_ppm = self.manual_ppm
         if not self.auto_slant:
@@ -246,7 +251,7 @@ class Decoder:
         # Retain the nominal VIS anchor unless a clean raw boundary refines it.
         self.observed_lines = {0:confidence} if known else {}
         self.first_sync_pending = known
-        self.last_sync = start
+        self.last_sync = anchor
         self.sync_gap = 0
         self.pd_channels = None
 
@@ -401,15 +406,15 @@ class Decoder:
             c = candidate
             b = previous(c)
             a = previous(b) if b else None
-            # Two seconds can contain only two PD180 syncs. One complete pair
-            # plus a second clean raw sync qualifies that slow mode; shorter
-            # modes retain the established three-pulse requirement.
-            two_sync = mode == "PD180" and a is None and b is not None
-            if two_sync:
-                a,b,c = b,c,None
             if a is None:
-                continue
-            points = [v for v in (a,b,c) if v is not None]
+                # Three pulses of a slow mode span more of the retained raw
+                # history than a run of consecutive syncs reliably provides.
+                # A qualifying pair plus stronger raw sync fits is accepted.
+                if b is None or profile.period < .75:
+                    continue
+                points = [b, c]
+            else:
+                points = [a, b, c]
             periods = np.diff([v[0] for v in points])/self.rate
             if len(periods)>1 and abs(periods[0]-periods[1]) > .002:
                 continue
@@ -420,16 +425,29 @@ class Decoder:
                 found = matched_sync(self.raw_history, self.rate, predicted, profile.sync, value[2])
                 refined.append((found[0] if found else predicted, value[1], value[2],
                                 found[1] if found else value[3]))
-            a,b = refined[:2]
-            if not self._extended_structure(profile, a):
-                continue
-            if two_sync:
-                references = [fit_reference_offset(self.raw_history,self.rate,v[0]+.002*self.rate,
-                                                  1200,v[2]) for v in refined]
-                if any(v is None or v[1]<.95 for v in references):
+            # The three-pulse chain is preferred. A slow mode whose earliest
+            # pulse already left the raw history can still qualify on its pair,
+            # because a Scottie row is read from before its own sync.
+            if len(refined) >= 3 and profile.period >= .75:
+                chains = (refined, refined[-2:])
+            else:
+                chains = (refined,)
+            for chain in chains:
+                if not self._extended_structure(profile, chain[0], mode):
                     continue
-            elif not self._extended_structure(profile,b):
+                if len(chain) >= 3:
+                    if not self._extended_structure(profile, chain[1], mode):
+                        continue
+                else:
+                    references = [fit_reference_offset(self.raw_history,self.rate,v[0]+.002*self.rate,
+                                                      1200,v[2]) for v in chain]
+                    if any(v is None or v[1]<.95 for v in references):
+                        continue
+                refined = chain
+                break
+            else:
                 continue
+            a = refined[0]
             self.measured_frequency = float(np.median([v[2] for v in refined]))
             self.frequency_confidence = min(v[3] for v in refined)
             self.frequency_source = "repeated_sync"
@@ -444,7 +462,7 @@ class Decoder:
                 self.observed_lines[index] = value[3]
             return
 
-    def _extended_structure(self, profile, candidate):
+    def _extended_structure(self, profile, candidate, mode):
         start, _, offset, _ = candidate
         try:
             if profile.vis == 12 and robot72_has_extra_sync(self.raw_history,self.rate,start,offset):
@@ -471,7 +489,7 @@ class Decoder:
             if profile.family == "pd":
                 channels = tuple((name, (a-start)/self.rate, b/self.rate)
                                  for name, (a,b) in pd120.channel_layout(
-                                     self.rate,start,profile.period*self.rate,mode="PD180").items())
+                                     self.rate,start,profile.period*self.rate,mode=mode).items())
             else:
                 channels = profile.channels
             for _, begin, duration in channels:
@@ -532,16 +550,20 @@ class Decoder:
         if not len(starts):
             return
         self._martin_next_scan = float(starts[-1] + step)
-        center = round(self.applied_frequency / 5) * 5
-        if self._martin_basis is None or self._martin_basis[0] != center:
-            # Retain the calibrated offset. Maximizing over many frequencies
-            # lets noisy picture transitions masquerade as shifted syncs.
-            tones = np.array([1200, 1500, 1900, 2300]) + center
+        searching = self.image is None and self.auto_frequency
+        # A previous image's calibration is not evidence for a new signal.
+        center = 0 if searching else round(self.applied_frequency / 5) * 5
+        key = center, searching
+        if self._martin_basis is None or self._martin_basis[0] != key:
+            # The bounded bank only bootstraps headerless acquisition; active
+            # tracking retains the calibrated tone and all qualification gates.
+            sync_tones = np.arange(950., 1450.1, 50.) if searching else np.array([1200.])
+            tones = np.r_[sync_tones, [1500, 1900, 2300]] + center
             n = np.arange(count) / self.rate
             basis = np.stack((np.cos(2 * np.pi * tones[:, None] * n),
                               np.sin(2 * np.pi * tones[:, None] * n)), axis=-1)
             basis -= basis.mean(axis=1, keepdims=True)
-            self._martin_basis = center, tones, basis, np.linalg.pinv(basis)
+            self._martin_basis = key, tones, basis, np.linalg.pinv(basis)
         _, tones, basis, inverse = self._martin_basis
         windows = history.read(starts[:, None] + np.arange(count))
         windows -= windows.mean(axis=1, keepdims=True)
@@ -550,16 +572,27 @@ class Decoder:
         projection = np.einsum("fji,wj->wfi", basis, windows)
         powers = np.clip(np.sum(coefficients * projection, axis=-1)
                          / np.maximum(energy[:, None], 1e-12), 0, 1)
-        strength = powers[:, 0]
-        competing = np.max(powers[:, 1:], axis=1)
+        sync_count = len(tones) - 3
+        best = np.argmax(powers[:, :sync_count], axis=1)
+        strength = powers[np.arange(len(starts)), best]
+        offsets = np.full(len(starts), float(center))
+        interior = np.ones(len(starts), dtype=bool)
+        if searching:
+            interior = (best > 0) & (best < sync_count - 1)
+            indices = np.flatnonzero(interior)
+            a, b, c = (powers[indices, best[indices] + delta] for delta in (-1, 0, 1))
+            curvature = a - 2 * b + c
+            correction = np.divide(.5 * (a - c), curvature, out=np.zeros_like(a), where=curvature < 0)
+            offsets[indices] = tones[best[indices]] - 1200 + 50 * np.clip(correction, -1, 1)
+        competing = np.max(powers[:, sync_count:], axis=1)
         level = np.sqrt(energy / count)
-        active = ((strength >= .35) & (strength >= 1.5 * competing)
+        active = (interior & (strength >= .35) & (strength >= 1.5 * competing)
                   & (level > .0015))
-        for start, good, score, competitor in zip(starts, active, strength, competing):
+        for start, good, score, competitor, offset in zip(starts, active, strength, competing, offsets):
             if good:
                 if not self._martin_long_run:
                     self._martin_run.append((float(start + count / 2), float(score),
-                                             float(score - .5 * competitor), float(center)))
+                                             float(score - .5 * competitor), float(offset)))
                     if len(self._martin_run) * step > .0065 * self.rate:
                         self._martin_run.clear()
                         self._martin_long_run = True
@@ -637,14 +670,14 @@ class Decoder:
                 if (abs(fitted_period / period - 1) > .005
                         or np.sqrt(np.mean(residual ** 2)) > .0008 * self.rate):
                     continue
-                offset = (self.applied_frequency if self.frequency_confidence >= .7
-                          else float(np.median([p[2] for p in chain])))
+                offset = (float(np.median([p[2] for p in chain])) if self.auto_frequency
+                          else self.applied_frequency)
                 if not all(self._boundary_valid(p[0], offset) for p in chain):
                     continue
                 if not all(self._video_valid(p[0], mode, offset) for p in chain[:-1]):
                     continue
                 confidence = float(min(.85, .6 + .25 * np.median([p[1] for p in chain])))
-                if self.auto_frequency and self.frequency_confidence < .7:
+                if self.auto_frequency:
                     self.measured_frequency = offset
                     self.frequency_confidence = min(.65, confidence)
                     self.frequency_source = "raw_martin_cadence"
@@ -853,7 +886,10 @@ class Decoder:
         while self.image:
             line = self.next_line
             start = self.clock.predict(line)
-            required = start+self.clock.period+(2 if not self.draining else -.00005*self.rate)
+            # A row is complete at the end of its last picture channel, which a
+            # Scottie row reaches well before its period ends.
+            row_end = start + self.clock.period * (row_span(profile) / profile.period)
+            required = row_end+(2 if not self.draining else -.00005*self.rate)
             if self.history.latest < required:
                 return
             scale = self.clock.period/(profile.period*self.rate)
@@ -895,7 +931,7 @@ class Decoder:
                            protocol_row_index=line if self.image.beginning_known else None,
                            original_position_known=self.image.beginning_known,
                            line_start_sample=start,emitted_at_sample=self.samples,
-                           row_audio_end_sample=start+self.clock.period)
+                           row_audio_end_sample=row_end)
             self.next_line += 1
             if self.next_line == profile.height:
                 self._finish("normal_end")
@@ -948,7 +984,7 @@ class Decoder:
             self._pd_render(pair*2+1,y,cr,cb,min(cq,yq),inferred,start,end)
             self.pd_channels=None
             self.next_line+=1
-            if self.next_line==pd120.PAIRS:
+            if self.next_line==self.physical_lines:
                 self._finish("normal_end")
 
     def _recover_sync(self,line,start,duration,scale):
@@ -994,7 +1030,7 @@ class Decoder:
             self._holding_signal = False
 
     def _check_sync_gap(self):
-        if self.sync_gap > (32 if self.clock.confidence >= .7 else 8):
+        if self.sync_gap > (32 if self.clock.stable_fit else 8):
             self._holding_signal = True
             # Retain the clock and quality evidence while disabling early abort.
             self.sync_gap = 0
@@ -1005,12 +1041,13 @@ class Decoder:
         profile = MODES[self.image.mode]
         line = row // 2 if profile.family == "pd" else row
         start = self.clock.predict(line)
+        row_end = start + self.clock.period * (row_span(profile) / profile.period)
         self.image.row(row, np.zeros((profile.width, 3), dtype=np.uint8), 0.0,
                        ["missing", "timing_recovered"],
                        received_row_sequence=row, physical_scan_line=line,
                        protocol_row_index=row if self.image.beginning_known else None,
                        original_position_known=self.image.beginning_known,
-                       line_start_sample=start, row_audio_end_sample=start+self.clock.period,
+                       line_start_sample=start, row_audio_end_sample=row_end,
                        emitted_at_sample=self.samples)
 
     def _missing_scan_line(self, line):
@@ -1121,6 +1158,33 @@ class Decoder:
                        emitted_at_sample=self.samples,
                        row_audio_end_sample=comp["start"]+self.clock.period)
 
+    def _image_event(self, event):
+        if event["type"] in ("row", "row_revision"):
+            row = event["row_index"]
+            profile = MODES[self.image.mode]
+            line = event.get("physical_scan_line", row // 2 if profile.family == "pd" else row)
+            if line not in self._line_tracking:
+                if line in self.observed_lines:
+                    tracking = "locked"
+                else:
+                    # Physical distance from received evidence survives abort
+                    # counter resets, PD's two rows, and chroma revisions.
+                    last = max((index for index in self.observed_lines if index <= line), default=-1)
+                    limit = 32 if self.clock.stable_fit else 8
+                    tracking = "lost" if line - last > limit else "predicted"
+                self._line_tracking[line] = tracking
+            tracking = self._line_tracking[line]
+            flags = list(event["quality_flags"])
+            if tracking == "lost" and "timing_recovered" in flags:
+                if "timing_unverified" not in flags:
+                    flags.append("timing_unverified")
+                event["row_confidence"] = min(event["row_confidence"], .25)
+            self.image.flags[row] = flags
+            event["quality_flags"] = flags
+            event.update(self.image.quality_fields())
+            event["tracking_status"] = tracking
+        self.emit(event)
+
     def status(self):
         output = len(self.image.rows) if self.image else 0
         missing = sum("missing" in flags for flags in self.image.flags.values()) if self.image else 0
@@ -1150,6 +1214,11 @@ class Decoder:
                      frequency_history_capacity_samples=self.history.capacity)
         if self.clock:
             value.update(self.clock.status(self.next_line))
+        value.update(self.image.quality_fields() if self.image else
+                     dict(decode_quality="good", sync_confirmed_row_count=0,
+                          unverified_row_count=0, longest_unverified_run=0))
+        value["tracking_status"] = (self._line_tracking[max(self._line_tracking)]
+                                    if self._line_tracking else "predicted")
         return value
 
     def _finish(self, reason):
@@ -1161,6 +1230,7 @@ class Decoder:
         self.clock = None
         self.components = {}
         self.observed_lines = {}
+        self._line_tracking = {}
         self.candidates.clear()
         self.extended_candidates.clear()
         self._clear_martin()

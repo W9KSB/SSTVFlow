@@ -8,7 +8,7 @@ Normal operation requires only the source's sample rate and its PCM audio. Mode 
 decoder 48000 < input.s16le > events.ndjson
 ```
 
-**Status:** Robot24, Robot36, Robot72, Martin M1/M2, and PD120/PD180 are implemented. Image-quality refinement is ongoing, especially for weak or interfered signals. Linux ARM64 is the intended deployment target; Raspberry Pi performance and Unix control-descriptor operation still need target-side validation.
+**Status:** Robot24, Robot36, Robot72, Martin M1/M2, Scottie S1/S2/DX, and PD50/90/120/160/180/240/290 are implemented. Image-quality refinement is ongoing, especially for weak or interfered signals. Linux ARM64 is the intended deployment target; Raspberry Pi performance and Unix control-descriptor operation still need target-side validation.
 
 ## Supported modes
 
@@ -19,8 +19,16 @@ decoder 48000 < input.s16le > events.ndjson
 | Robot72 | 320 × 240 | Automatic VIS or repeated line-structure acquisition |
 | MartinM1 | 320 × 256 | Automatic VIS or repeated line-structure acquisition |
 | MartinM2 | 320 × 256 | Automatic VIS or repeated line-structure acquisition |
+| Scottie1 | 320 × 256 | Automatic VIS or repeated line-structure acquisition |
+| Scottie2 | 320 × 256 | Automatic VIS or repeated line-structure acquisition |
+| ScottieDX | 320 × 256 | Automatic VIS or repeated line-structure acquisition |
+| PD50 | 320 × 256 | Automatic VIS or repeated line-structure acquisition |
+| PD90 | 320 × 256 | Automatic VIS or repeated line-structure acquisition |
 | PD120 | 640 × 496 | Automatic VIS or repeated line-structure acquisition |
+| PD160 | 512 × 400 | Automatic VIS or repeated line-structure acquisition |
 | PD180 | 640 × 496 | Automatic VIS or repeated line-structure acquisition |
+| PD240 | 640 × 496 | Automatic VIS or repeated line-structure acquisition |
+| PD290 | 800 × 616 | Automatic VIS or repeated line-structure acquisition |
 
 Progressive RGB rows and row revisions are available during reception, followed by an authoritative lossless PNG when an image or recoverable segment ends.
 
@@ -115,7 +123,7 @@ with open("events.ndjson", encoding="utf-8") as stream:
 
 A live image consumer retains the highest revision for each `(image_id, row_index)`. Robot36 emits provisional chroma and revises earlier rows when complementary chroma arrives. The final PNG already contains the newest row revisions.
 
-`image_complete` means the known-start protocol-length image ended; reception can still contain missing or damaged rows. `decoded_row_count` excludes rows marked missing, while `output_row_count` includes every emitted position. These are heuristic reception classifications. See the [complete event schema](docs/events.md) for timing, confidence, flags, and partial-image semantics.
+`image_complete` means a known-start protocol-length image ended without missing or timing-unverified rows; it does not certify picture fidelity. Missing or unverified rows produce `image_partial` while preserving the full canvas and completion reason. `decoded_row_count` excludes rows marked missing, while `output_row_count` includes every emitted position. `tracking_status` reports current synchronization, and `decode_quality` summarizes received evidence. These are heuristic reception classifications. See the [complete event schema](docs/events.md) for timing, confidence, flags, and partial-image semantics.
 
 Consumers must keep draining stdout. A blocked output pipe applies backpressure, and a caller's unbounded event queue can exhaust its own memory.
 
