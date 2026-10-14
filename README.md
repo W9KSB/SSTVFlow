@@ -24,6 +24,8 @@ decoder 48000 < input.s16le > events.ndjson
 
 Progressive RGB rows and row revisions are available during reception, followed by an authoritative lossless PNG when an image or recoverable segment ends.
 
+Acquired receptions stay active through fades for a bounded, mode-specific PCM receive window, preserving missing rows in their original local positions. Status reports whether reception is holding through signal loss and how much receive time remains. `Decoder.control({"command": "stop_current", "image_id": active_id})` stops one matching reception and resumes automatic searching without restarting the decoder; see [controls](docs/control.md) and [events](docs/events.md) for acknowledgement and completion semantics.
+
 ## Installation
 
 Requires Python 3.11 or newer, NumPy, SciPy, and Pillow. The installation command installs these runtime dependencies. Run the following commands from the project checkout.

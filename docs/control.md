@@ -8,6 +8,7 @@ Launch `decoder RATE --control-fd N`. N must be an inherited read descriptor >=3
 |---|---|
 | Query | `{"command":"status"}` |
 | Reset | `{"command":"reset"}` |
+| Stop the displayed reception | `{"command":"stop_current","image_id":"<active image ID>","request_id":"optional correlation ID"}` |
 | Automatic selection | `{"command":"mode","mode":"auto"}` |
 | Force Robot 24 | `{"command":"mode","mode":"Robot24"}` |
 | Force Robot 36 | `{"command":"mode","mode":"Robot36"}` |
@@ -34,6 +35,10 @@ Launch `decoder RATE --control-fd N`. N must be an inherited read descriptor >=3
 Forcing a mode selects the accepted protocol family but still requires valid line structure. It does not manufacture synchronization. Switching mode closes the active recoverable image as partial. Switching manual timing preserves the predicted phase of the next physical scan rather than jumping the whole image.
 
 Reset closes the active image (`manual_reset`), discards pending PCM bytes, analytic/FIR history, protocol/VIS acquisition, timing observations, row/chroma state, and automatic frequency lock. The absolute consumed-sample counter and configured controls persist. It does not restart the process.
+
+`stop_current` stops only an active image with the supplied nonempty string `image_id`. A stale ID leaves a newer reception and its buffered audio untouched. A matching request emits an available partial PNG with `completion_reason:"manual_stop"`, discards pending PCM and acquisition/DSP evidence, and immediately resumes automatic searching on the same decoder instance. Frequency correction and lock, forced mode, timing, display, filtering, and noise settings persist. The acknowledgement is a `status` event with `command:"stop_current"`, the supplied `request_id` (or `null`), `stopped`, `decoding`, and the currently active `image_id` (or `null`). No PNG event is emitted when the stopped image has no rows. This command also works through Python's `Decoder.control()`.
+
+Once acquired, an image remains active through signal or sync loss for a bounded receive window: `height * period` seconds for Robot/Martin, or `(height / 2) * period` for PD. The window starts at acquisition on the processed PCM timeline; silence samples advance it, delivery pauses do not. Normal frame completion, a valid new header, stop, reset, mode changes, EOF, and reported discontinuities can still end reception sooner. At window expiry, unavailable positions are emitted as black rows with zero confidence and missing/recovered flags before `duration_elapsed` finalization. Automatic searching then resumes. Status exposes `holding_signal` and `receive_seconds_remaining`; both clear when reception ends.
 
 Automatic noise reduction checks constant-tone references before filtering channel values with a local variance-dependent estimate; clean fitted channels bypass it. Noise estimation also works with headerless acquisition. A manual strength disables automatic treatment and blends a three-sample median within each extracted channel. Chroma uses the requested strength; luminance uses 35% of that strength to reduce damage to fine detail. Zero disables both treatments. `auto:true` rejects a simultaneous manual strength. Changes apply to subsequently extracted rows; existing published rows are not silently modified.
 
